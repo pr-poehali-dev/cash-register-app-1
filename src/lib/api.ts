@@ -1,23 +1,31 @@
 const BASE_URL = "https://functions.poehali.dev/7f663196-ac13-4079-91b8-b50f33da04f0";
 
 async function request(path: string, options: RequestInit = {}, token?: string, retries = 3): Promise<Record<string, unknown>> {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...(options.headers as Record<string, string> || {}),
-  };
-  if (token) headers["X-Auth-Token"] = token;
+  // Токен передаём через query string чтобы не добавлять кастомные заголовки
+  // (кастомные заголовки вызывают CORS preflight, который платформа не пропускает)
+  // Используем text/plain чтобы избежать CORS preflight
+  // (application/json триггерит preflight, text/plain — нет)
+  const headers: Record<string, string> = {};
+  const isPost = options.method === "POST" || options.method === "PUT";
+  if (isPost && options.body) headers["Content-Type"] = "text/plain";
+
+  // Добавляем токен в URL как ?_t=...
+  let url = `${BASE_URL}${path}`;
+  if (token) {
+    const sep = url.includes("?") ? "&" : "?";
+    url = `${url}${sep}_t=${encodeURIComponent(token)}`;
+  }
 
   let lastError: Error = new Error("Нет ответа от сервера");
 
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      const res = await fetch(`${BASE_URL}${path}`, { ...options, headers });
+      const res = await fetch(url, { ...options, headers });
       const data = await res.json();
       if (!res.ok) throw new Error((data as { error?: string }).error || "Ошибка сервера");
       return data as Record<string, unknown>;
     } catch (e) {
       lastError = e as Error;
-      // Повторяем только при сетевой ошибке (Failed to fetch), не при HTTP-ошибках
       const isNetworkError = e instanceof TypeError;
       if (isNetworkError && attempt < retries) {
         await new Promise((r) => setTimeout(r, 400 * attempt));

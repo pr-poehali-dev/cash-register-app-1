@@ -32,13 +32,34 @@ def get_user_from_token(conn, token):
 
 def handler(event: dict, context) -> dict:
     """POS API — авторизация, товары, заказы, пользователи, курьеры"""
+    # CORS preflight — должен быть ПЕРВЫМ, до любой другой логики
     if event.get("httpMethod") == "OPTIONS":
-        return {"statusCode": 200, "headers": cors_headers(), "body": ""}
+        return {
+            "statusCode": 200,
+            "headers": {
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, X-Auth-Token, X-User-Id, Authorization",
+                "Access-Control-Max-Age": "86400",
+            },
+            "body": ""
+        }
 
     method = event.get("httpMethod", "GET")
-    path = event.get("path", "/").rstrip("/")
+    # path может приходить как полный путь вида /7f663196-.../auth/login
+    # берём только хвост после ID функции
+    raw_path = event.get("path", "/")
+    # Нормализуем: убираем возможный префикс с UUID функции
+    import re
+    path_match = re.sub(r'^/[0-9a-f\-]{36}', '', raw_path)
+    path = path_match.rstrip("/") if path_match else "/"
     qs = event.get("queryStringParameters") or {}
-    token = (event.get("headers") or {}).get("X-Auth-Token") or (event.get("headers") or {}).get("x-auth-token")
+    # Токен приходит либо из заголовка, либо из query string ?_t=
+    token = (
+        (event.get("headers") or {}).get("X-Auth-Token")
+        or (event.get("headers") or {}).get("x-auth-token")
+        or qs.get("_t")
+    )
     body = {}
     if event.get("body"):
         try:
