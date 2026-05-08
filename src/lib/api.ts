@@ -1,33 +1,39 @@
+// Все запросы идут на КОРЕНЬ функции, путь передаётся как ?_path=...
+// Это обязательно т.к. платформа не поддерживает подпути у функций
 const BASE_URL = "https://functions.poehali.dev/7f663196-ac13-4079-91b8-b50f33da04f0";
 
-async function request(path: string, options: RequestInit = {}, token?: string, retries = 3): Promise<Record<string, unknown>> {
-  // Токен передаём через query string чтобы не добавлять кастомные заголовки
-  // (кастомные заголовки вызывают CORS preflight, который платформа не пропускает)
-  // Используем text/plain чтобы избежать CORS preflight
-  // (application/json триггерит preflight, text/plain — нет)
-  const headers: Record<string, string> = {};
-  const isPost = options.method === "POST" || options.method === "PUT";
-  if (isPost && options.body) headers["Content-Type"] = "text/plain";
+async function request(
+  path: string,
+  method: "GET" | "POST" | "PUT" | "DELETE" = "GET",
+  body?: object,
+  token?: string,
+  retries = 3
+): Promise<Record<string, unknown>> {
+  // Собираем query string
+  const params = new URLSearchParams({ _path: path });
+  if (token) params.set("_t", token);
+  const url = `${BASE_URL}?${params.toString()}`;
 
-  // Добавляем токен в URL как ?_t=...
-  let url = `${BASE_URL}${path}`;
-  if (token) {
-    const sep = url.includes("?") ? "&" : "?";
-    url = `${url}${sep}_t=${encodeURIComponent(token)}`;
-  }
+  // text/plain не триггерит CORS preflight (в отличие от application/json)
+  const headers: Record<string, string> = {};
+  if (body) headers["Content-Type"] = "text/plain";
 
   let lastError: Error = new Error("Нет ответа от сервера");
 
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      const res = await fetch(url, { ...options, headers });
+      const res = await fetch(url, {
+        method,
+        headers,
+        body: body ? JSON.stringify(body) : undefined,
+      });
       const data = await res.json();
       if (!res.ok) throw new Error((data as { error?: string }).error || "Ошибка сервера");
       return data as Record<string, unknown>;
     } catch (e) {
       lastError = e as Error;
-      const isNetworkError = e instanceof TypeError;
-      if (isNetworkError && attempt < retries) {
+      // Повтор только при сетевой ошибке
+      if (e instanceof TypeError && attempt < retries) {
         await new Promise((r) => setTimeout(r, 400 * attempt));
         continue;
       }
@@ -37,43 +43,30 @@ async function request(path: string, options: RequestInit = {}, token?: string, 
   throw lastError;
 }
 
-// Прогрев функции при старте (холодный старт ~300-400ms)
+// Прогрев при старте
 let warmedUp = false;
 export async function warmUp() {
   if (warmedUp) return;
   warmedUp = true;
-  try { await fetch(`${BASE_URL}/`, { method: "GET" }); } catch (_) { /* ignore */ }
+  try { await fetch(`${BASE_URL}?_path=%2F`); } catch (_) { /* ignore */ }
 }
 
 export const api = {
-  // Auth
-  login: (body: object) => request("/auth/login", { method: "POST", body: JSON.stringify(body) }),
-  register: (body: object) => request("/auth/register", { method: "POST", body: JSON.stringify(body) }),
-  me: (token: string) => request("/auth/me", {}, token),
+  login:    (body: object) => request("/auth/login", "POST", body),
+  register: (body: object) => request("/auth/register", "POST", body),
+  me:       (token: string) => request("/auth/me", "GET", undefined, token),
 
-  // Products
-  getProducts: (token?: string, search?: string) => {
-    const qs = search ? `?search=${encodeURIComponent(search)}` : "";
-    return request(`/products${qs}`, {}, token);
-  },
-  getProductByBarcode: (barcode: string) => request(`/products?barcode=${encodeURIComponent(barcode)}`),
-  createProduct: (body: object, token: string) => request("/products", { method: "POST", body: JSON.stringify(body) }, token),
-  updateProduct: (id: number, body: object, token: string) => request(`/products/${id}`, { method: "PUT", body: JSON.stringify(body) }, token),
+  getProducts:       (token?: string, search?: string) => request(search ? `/products?search=${encodeURIComponent(search)}` : "/products", "GET", undefined, token),
+  getProductByBarcode: (barcode: string) => request(`/products?barcode=${encodeURIComponent(barcode)}`, "GET"),
+  createProduct:     (body: object, token: string) => request("/products", "POST", body, token),
+  updateProduct:     (id: number, body: object, token: string) => request(`/products/${id}`, "PUT", body, token),
 
-  // Orders
-  getOrders: (token: string, status?: string) => {
-    const qs = status ? `?status=${status}` : "";
-    return request(`/orders${qs}`, {}, token);
-  },
-  createOrder: (body: object, token: string) => request("/orders", { method: "POST", body: JSON.stringify(body) }, token),
-  updateOrder: (id: number, body: object, token: string) => request(`/orders/${id}`, { method: "PUT", body: JSON.stringify(body) }, token),
+  getOrders:   (token: string, status?: string) => request(status ? `/orders?status=${status}` : "/orders", "GET", undefined, token),
+  createOrder: (body: object, token: string) => request("/orders", "POST", body, token),
+  updateOrder: (id: number, body: object, token: string) => request(`/orders/${id}`, "PUT", body, token),
 
-  // Users
-  getUsers: (token: string, role?: string) => {
-    const qs = role ? `?role=${role}` : "";
-    return request(`/users${qs}`, {}, token);
-  },
-  updateUser: (id: number, body: object, token: string) => request(`/users/${id}`, { method: "PUT", body: JSON.stringify(body) }, token),
+  getUsers:   (token: string, role?: string) => request(role ? `/users?role=${role}` : "/users", "GET", undefined, token),
+  updateUser: (id: number, body: object, token: string) => request(`/users/${id}`, "PUT", body, token),
 };
 
 export type User = {

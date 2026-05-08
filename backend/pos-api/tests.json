@@ -1,11 +1,11 @@
 {
   "tests": [
     {
-      "name": "Health check - root returns 404",
+      "name": "GET products via _path",
       "method": "GET",
-      "path": "/",
-      "expectedStatus": 404,
-      "expectedBody": {"error": "string"},
+      "path": "/?_path=%2Fproducts",
+      "expectedStatus": 200,
+      "expectedBody": {"products": []},
       "bodyMatcher": "partial"
     },
     {
