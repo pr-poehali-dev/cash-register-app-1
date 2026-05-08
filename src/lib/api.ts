@@ -1,19 +1,40 @@
 const BASE_URL = "https://functions.poehali.dev/7f663196-ac13-4079-91b8-b50f33da04f0";
 
-async function request(path: string, options: RequestInit = {}, token?: string) {
+async function request(path: string, options: RequestInit = {}, token?: string, retries = 3): Promise<Record<string, unknown>> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...(options.headers as Record<string, string> || {}),
   };
   if (token) headers["X-Auth-Token"] = token;
 
-  const res = await fetch(`${BASE_URL}${path}`, {
-    ...options,
-    headers,
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || "Ошибка сервера");
-  return data;
+  let lastError: Error = new Error("Нет ответа от сервера");
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(`${BASE_URL}${path}`, { ...options, headers });
+      const data = await res.json();
+      if (!res.ok) throw new Error((data as { error?: string }).error || "Ошибка сервера");
+      return data as Record<string, unknown>;
+    } catch (e) {
+      lastError = e as Error;
+      // Повторяем только при сетевой ошибке (Failed to fetch), не при HTTP-ошибках
+      const isNetworkError = e instanceof TypeError;
+      if (isNetworkError && attempt < retries) {
+        await new Promise((r) => setTimeout(r, 400 * attempt));
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw lastError;
+}
+
+// Прогрев функции при старте (холодный старт ~300-400ms)
+let warmedUp = false;
+export async function warmUp() {
+  if (warmedUp) return;
+  warmedUp = true;
+  try { await fetch(`${BASE_URL}/`, { method: "GET" }); } catch (_) { /* ignore */ }
 }
 
 export const api = {

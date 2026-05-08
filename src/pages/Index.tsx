@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import { api, User, Product, Order } from "@/lib/api";
+import { useState, useEffect, useRef } from "react";
+import { api, warmUp, User, Product, Order } from "@/lib/api";
 import Icon from "@/components/ui/icon";
 import { toast } from "@/hooks/use-toast";
 import { Toaster } from "@/components/ui/toaster";
@@ -1140,11 +1140,232 @@ function CashierView({ user, token, onLogout }: { user: User; token: string; onL
   );
 }
 
+// ─── SCREEN: COURIER VIEW ────────────────────────────────────────────────────
+function CourierView({ user, token, onLogout }: { user: User; token: string; onLogout: () => void }) {
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState<"active" | "done">("active");
+  const [expandedOrder, setExpandedOrder] = useState<number | null>(null);
+
+  useEffect(() => { loadOrders(); }, []);
+
+  const loadOrders = async () => {
+    setLoading(true);
+    try {
+      const res = await api.getOrders(token);
+      setOrders((res.orders as unknown as Order[]) || []);
+    } catch (e) {
+      toast({ title: "Ошибка загрузки", description: (e as Error).message, variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const changeStatus = async (orderId: number, status: string) => {
+    try {
+      await api.updateOrder(orderId, { status }, token);
+      await loadOrders();
+      toast({ title: "Статус обновлён", description: STATUS_LABELS[status] });
+    } catch (e) {
+      toast({ title: "Ошибка", description: (e as Error).message, variant: "destructive" });
+    }
+  };
+
+  const active = orders.filter((o) => o.status !== "delivered" && o.status !== "cancelled");
+  const done = orders.filter((o) => o.status === "delivered" || o.status === "cancelled");
+
+  const displayOrders = tab === "active" ? active : done;
+
+  return (
+    <div className="min-h-screen flex flex-col">
+      {/* Header */}
+      <header className="glass border-b border-border px-4 py-3 flex items-center justify-between sticky top-0 z-10">
+        <Logo />
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 bg-secondary rounded-lg px-3 py-1.5">
+            <Icon name="Bike" size={16} className="text-primary" />
+            <span className="text-sm font-medium text-white">{user.name}</span>
+          </div>
+          <button onClick={onLogout} className="p-2 rounded-lg hover:bg-secondary transition-colors text-muted-foreground hover:text-white">
+            <Icon name="LogOut" size={18} />
+          </button>
+        </div>
+      </header>
+
+      {/* Stats bar */}
+      <div className="grid grid-cols-3 gap-0 border-b border-border bg-card">
+        <div className="flex flex-col items-center py-3 border-r border-border">
+          <span className="font-oswald text-xl font-bold text-primary">{active.length}</span>
+          <span className="text-xs text-muted-foreground">Активных</span>
+        </div>
+        <div className="flex flex-col items-center py-3 border-r border-border">
+          <span className="font-oswald text-xl font-bold text-green-400">{orders.filter(o => o.status === "delivered").length}</span>
+          <span className="text-xs text-muted-foreground">Доставлено</span>
+        </div>
+        <div className="flex flex-col items-center py-3">
+          <span className="font-oswald text-xl font-bold text-white">{orders.reduce((s, o) => o.status === "delivered" ? s + Number(o.total) : s, 0).toFixed(0)} ₽</span>
+          <span className="text-xs text-muted-foreground">Выручка</span>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <nav className="flex border-b border-border bg-card">
+        <button
+          onClick={() => setTab("active")}
+          className={`flex-1 flex items-center justify-center gap-2 py-3 text-sm font-medium transition-all ${tab === "active" ? "text-primary border-b-2 border-primary" : "text-muted-foreground hover:text-white"}`}
+        >
+          <Icon name="Bike" size={16} />
+          Активные
+          {active.length > 0 && (
+            <span className="bg-primary text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">{active.length}</span>
+          )}
+        </button>
+        <button
+          onClick={() => setTab("done")}
+          className={`flex-1 flex items-center justify-center gap-2 py-3 text-sm font-medium transition-all ${tab === "done" ? "text-primary border-b-2 border-primary" : "text-muted-foreground hover:text-white"}`}
+        >
+          <Icon name="CheckCircle" size={16} />
+          Завершённые
+        </button>
+      </nav>
+
+      <main className="flex-1 p-4 max-w-2xl mx-auto w-full">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-oswald text-base font-semibold text-white">
+            {tab === "active" ? "Мои заказы" : "История"}
+          </h2>
+          <button onClick={loadOrders} className="p-2 rounded-lg hover:bg-secondary transition-colors text-muted-foreground">
+            <Icon name="RefreshCw" size={15} />
+          </button>
+        </div>
+
+        {loading ? (
+          <div className="flex justify-center py-16"><div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>
+        ) : displayOrders.length === 0 ? (
+          <div className="text-center py-16 text-muted-foreground">
+            <Icon name="PackageSearch" size={48} className="mx-auto mb-3 opacity-30" />
+            <p>{tab === "active" ? "Нет активных заказов" : "История пуста"}</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {displayOrders.map((o) => (
+              <div key={o.id} className={`glass rounded-xl border overflow-hidden animate-slide-up ${o.status === "delivery" ? "neon-border" : "border-border"}`}>
+                {/* Order header */}
+                <div
+                  className="p-4 flex items-start gap-3 cursor-pointer hover:bg-white/5 transition-colors"
+                  onClick={() => setExpandedOrder(expandedOrder === o.id ? null : o.id)}
+                >
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${o.status === "delivery" ? "bg-primary/20" : "bg-secondary"}`}>
+                    <Icon name={o.status === "delivery" ? "Bike" : o.status === "delivered" ? "CheckCircle" : "Package"} size={20} className={o.status === "delivery" ? "text-primary" : "text-muted-foreground"} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap mb-1">
+                      <span className="font-oswald font-bold text-white">Заказ №{o.id}</span>
+                      <Badge label={STATUS_LABELS[o.status] || o.status} variant={statusClass(o.status)} />
+                    </div>
+                    <div className="text-sm text-muted-foreground">{o.client_name || "Клиент"}</div>
+                    {o.delivery_address && (
+                      <div className="flex items-center gap-1 mt-1 text-xs text-muted-foreground">
+                        <Icon name="MapPin" size={12} />
+                        <span className="truncate">{o.delivery_address}</span>
+                      </div>
+                    )}
+                    <div className="font-oswald font-bold text-primary mt-1">{Number(o.total).toFixed(0)} ₽</div>
+                  </div>
+                  <Icon name={expandedOrder === o.id ? "ChevronUp" : "ChevronDown"} size={16} className="text-muted-foreground shrink-0 mt-1" />
+                </div>
+
+                {/* Expanded */}
+                {expandedOrder === o.id && (
+                  <div className="border-t border-border p-4 space-y-4 animate-fade-in bg-black/10">
+                    {/* Items */}
+                    <div>
+                      <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">Состав</p>
+                      <div className="space-y-1">
+                        {(o.items || []).map((item) => (
+                          <div key={item.id} className="flex justify-between text-sm">
+                            <span className="text-white">{item.product_name} × {item.quantity}</span>
+                            <span className="text-muted-foreground">{(item.price * item.quantity).toFixed(0)} ₽</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Client info */}
+                    <div className="glass rounded-xl p-3 border border-border space-y-1.5">
+                      <p className="text-xs text-muted-foreground uppercase tracking-wider">Клиент</p>
+                      <div className="flex items-center gap-2 text-sm">
+                        <Icon name="User" size={14} className="text-muted-foreground" />
+                        <span className="text-white">{o.client_name || "—"}</span>
+                      </div>
+                      {o.client_phone && (
+                        <div className="flex items-center gap-2 text-sm">
+                          <Icon name="Phone" size={14} className="text-muted-foreground" />
+                          <a href={`tel:${o.client_phone}`} className="text-primary hover:underline">{o.client_phone}</a>
+                        </div>
+                      )}
+                      {o.delivery_address && (
+                        <div className="flex items-center gap-2 text-sm">
+                          <Icon name="MapPin" size={14} className="text-muted-foreground" />
+                          <span className="text-white">{o.delivery_address}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {o.notes && (
+                      <div>
+                        <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Комментарий</p>
+                        <p className="text-sm text-white bg-secondary rounded-lg px-3 py-2">{o.notes}</p>
+                      </div>
+                    )}
+
+                    {/* Action buttons */}
+                    {tab === "active" && (
+                      <div className="flex gap-2 flex-wrap">
+                        {o.status === "ready" && (
+                          <button
+                            onClick={() => changeStatus(o.id, "delivery")}
+                            className="flex-1 bg-primary hover:bg-primary/90 text-white font-semibold py-2.5 rounded-xl transition-all neon-glow flex items-center justify-center gap-2"
+                          >
+                            <Icon name="Bike" size={16} className="text-white" />
+                            Забрал, везу
+                          </button>
+                        )}
+                        {o.status === "delivery" && (
+                          <button
+                            onClick={() => changeStatus(o.id, "delivered")}
+                            className="flex-1 bg-green-600 hover:bg-green-500 text-white font-semibold py-2.5 rounded-xl transition-all flex items-center justify-center gap-2"
+                          >
+                            <Icon name="CheckCircle" size={16} className="text-white" />
+                            Доставил
+                          </button>
+                        )}
+                        {(o.status === "new" || o.status === "processing") && (
+                          <div className="flex-1 bg-secondary rounded-xl py-2.5 text-center text-sm text-muted-foreground">
+                            Ожидает готовности
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function Index() {
   const [screen, setScreen] = useState<AppRole>("select_device");
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string>("");
+
+  // Прогрев функции при старте
+  useEffect(() => { warmUp(); }, []);
 
   function handleDeviceSelect(d: DeviceRole) {
     if (d === "pc") setScreen("admin_login");
@@ -1180,14 +1401,7 @@ export default function Index() {
       {screen === "scanner" && <ScannerView token={token} onBack={() => setScreen("select_phone_mode")} />}
       {screen === "client" && user && <ClientView user={user} token={token} onLogout={handleLogout} />}
       {screen === "cashier" && user && <CashierView user={user} token={token} onLogout={handleLogout} />}
-      {screen === "courier" && user && (
-        <div className="min-h-screen flex items-center justify-center">
-          <div className="text-center">
-            <p className="text-muted-foreground">Войдите через ПК для работы курьера</p>
-            <button onClick={handleLogout} className="mt-4 text-primary hover:underline text-sm">Выйти</button>
-          </div>
-        </div>
-      )}
+      {screen === "courier" && user && <CourierView user={user} token={token} onLogout={handleLogout} />}
     </>
   );
 }
